@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [0.3.1] — 2026-06-19
+
+### Security
+
+- **Container now runs as uid/gid 65532** (the distroless "nonroot" uid) instead of 1000. On a rootful Docker host without userns-remap a container uid maps 1:1 to the host uid; uid 1000 commonly belongs to a privileged human operator account, so a container escape from guise would have landed as that user. 65532 is a dedicated, unprivileged, non-overlapping uid. Packaging-only change — no application behavior change. Operators upgrading must `chown -R 65532:65532` the guise data volume before recreating the container.
+
 ## [0.3.0] — 2026-05-14
 
 ### Added

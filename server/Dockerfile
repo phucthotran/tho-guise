@@ -12,7 +12,8 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends docker-ce-cli \
  && rm -rf /var/lib/apt/lists/* \
  && apt-get purge -y --auto-remove gnupg curl \
- && useradd --create-home --shell /usr/sbin/nologin --uid 1000 guise \
+ && groupadd --gid 65532 guise \
+ && useradd --create-home --shell /usr/sbin/nologin --uid 65532 --gid 65532 guise \
  && mkdir /data && chown guise:guise /data
 
 WORKDIR /app
