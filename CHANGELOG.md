@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [0.3.3] — 2026-10-07
+
+### Changed
+
+- **IMAP login failures now log a safe error detail** (`err=…`, plus `host:port`) on web and API auth paths — e.g. DNS/`gaierror`, `SSLError`, or Dovecot `AUTHENTICATIONFAILED` — without ever logging the password. Intended for Coolify/operator log panels when shell access is unavailable.
+
 ## [0.3.2] — 2026-10-07
 
 ### Changed

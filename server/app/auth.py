@@ -131,7 +131,24 @@ def build_imap_username(username: str, config: Config) -> str:
     return f"{username}@{config.domain}"
 
 
-def _imap_check(imap_username: str, password: str, config: Config) -> bool:
+@dataclass(frozen=True)
+class ImapAuthResult:
+    """Outcome of an IMAP LOGIN attempt. ``error`` is safe to write to logs
+    (never includes the password)."""
+
+    ok: bool
+    error: str | None = None
+
+
+def _imap_error_detail(exc: BaseException, config: Config) -> str:
+    """Compact, password-free error string for Coolify/operator logs."""
+    msg = " ".join(str(exc).split())
+    if len(msg) > 160:
+        msg = msg[:160] + "..."
+    return f"{type(exc).__name__}: {msg} host={config.imap_host}:{config.imap_port}"
+
+
+def _imap_check(imap_username: str, password: str, config: Config) -> ImapAuthResult:
     """Authenticate against the mailserver's dovecot via IMAPS.
 
     ``imap_username`` must already be a full email address (see
@@ -160,32 +177,42 @@ def _imap_check(imap_username: str, password: str, config: Config) -> bool:
                 imap.logout()
             except Exception:
                 pass
-        return True
-    except imaplib.IMAP4.error:
-        return False
-    except OSError:
+        return ImapAuthResult(ok=True)
+    except imaplib.IMAP4.error as exc:
+        return ImapAuthResult(ok=False, error=_imap_error_detail(exc, config))
+    except OSError as exc:
         # ssl.SSLError is a subclass of OSError, so it's covered here too.
-        return False
+        return ImapAuthResult(ok=False, error=_imap_error_detail(exc, config))
+    except Exception as exc:  # noqa: BLE001 — surface unexpected failures in logs
+        return ImapAuthResult(ok=False, error=_imap_error_detail(exc, config))
 
 
 def verify_credentials(raw_username: str, password: str, config: Config) -> str | None:
-    """Normalize + validate + IMAP-check. Returns short username on success.
+    """Normalize + validate + IMAP-check. Returns short username on success."""
+    username, _error = check_credentials(raw_username, password, config)
+    return username
 
-    Shared by the web login flow and the API auth path so they accept exactly
-    the same identities. Accepts short usernames or full emails on an
-    allowlisted domain. Does not store or hash passwords — plaintext is sent
-    over IMAPS to Dovecot only.
+
+def check_credentials(
+    raw_username: str, password: str, config: Config,
+) -> tuple[str | None, str | None]:
+    """Normalize + validate + IMAP-check.
+
+    Returns ``(short_username, None)`` on success, or ``(None, error_detail)``
+    on failure. ``error_detail`` is safe for logs (no password). Shared by the
+    web login flow and the API auth path so they accept the same identities.
     """
     if not password:
-        return None
+        return None, "password_missing"
     identity = normalize_login_username(raw_username, config)
     if isinstance(identity, NormalizeError):
-        return None
+        return None, f"normalize:{identity.reason}"
     if identity.username in config.denied_users:
-        return None
-    if _imap_check(identity.imap_username, password, config):
-        return identity.username
-    return None
+        return None, "denied_user"
+    result = _imap_check(identity.imap_username, password, config)
+    if result.ok:
+        return identity.username, None
+    return None, result.error or "imap_auth_failed"
 
 
 def login_required(view: Callable) -> Callable:
@@ -220,21 +247,27 @@ def register(app: Flask) -> None:
                 flash("This account is not permitted to use guise.", "error")
             elif not password:
                 flash("Password required.", "error")
-            elif _imap_check(identity.imap_username, password, config):
-                session.clear()
-                session["user"] = identity.username
-                session.permanent = True
-                current_app.logger.info(
-                    "LOGIN user=%s imap=%s ip=%s",
-                    identity.username, identity.imap_username, request.remote_addr,
-                )
-                default_next = url_for("main.index")
-                next_url = _safe_next_url(request.args.get("next"), default_next)
-                return redirect(next_url)
             else:
+                imap_result = _imap_check(identity.imap_username, password, config)
+                if imap_result.ok:
+                    session.clear()
+                    session["user"] = identity.username
+                    session.permanent = True
+                    current_app.logger.info(
+                        "LOGIN user=%s imap=%s ip=%s",
+                        identity.username, identity.imap_username, request.remote_addr,
+                    )
+                    default_next = url_for("main.index")
+                    next_url = _safe_next_url(request.args.get("next"), default_next)
+                    return redirect(next_url)
                 current_app.logger.warning(
-                    "LOGIN_FAILED user=%s imap=%s ip=%s",
-                    identity.username, identity.imap_username, request.remote_addr,
+                    "LOGIN_FAILED user=%s imap=%s ip=%s host=%s:%s err=%s",
+                    identity.username,
+                    identity.imap_username,
+                    request.remote_addr,
+                    config.imap_host,
+                    config.imap_port,
+                    imap_result.error,
                 )
                 flash("Login failed.", "error")
         return render_template("login.html")
