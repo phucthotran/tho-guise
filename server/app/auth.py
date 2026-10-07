@@ -171,7 +171,12 @@ def _imap_check(imap_username: str, password: str, config: Config) -> ImapAuthRe
         if config.imap_cafile:
             ctx.load_verify_locations(cafile=config.imap_cafile)
     try:
-        with imaplib.IMAP4_SSL(config.imap_host, config.imap_port, ssl_context=ctx, timeout=10) as imap:
+        with imaplib.IMAP4_SSL(
+            config.imap_host,
+            config.imap_port,
+            ssl_context=ctx,
+            timeout=config.imap_timeout,
+        ) as imap:
             imap.login(imap_username, password)
             try:
                 imap.logout()

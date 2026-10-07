@@ -63,6 +63,7 @@ Set in the deploying compose file.
 | `GUISE_MAILSERVER_CONTAINER` | `mailserver` | `docker exec <this>` target |
 | `GUISE_IMAP_HOST` | `mailserver` | IMAP host for auth |
 | `GUISE_IMAP_PORT` | `993` | IMAPS port |
+| `GUISE_IMAP_TIMEOUT` | `30` | Seconds for IMAP connect/login (raise if Bitwarden API hits `TimeoutError`) |
 | `GUISE_IMAP_CAFILE` | (system trust store) | Optional CA bundle path for IMAP TLS validation |
 | `GUISE_IMAP_INSECURE` | `false` | Disable IMAP TLS verification entirely — explicit escape hatch |
 | `GUISE_API_AUTOLABEL` | `true` | Auto-label aliases from the API's `?hostname=` query parameter; set to `false` to always produce unlabeled `g-<8hex>` aliases via the API |

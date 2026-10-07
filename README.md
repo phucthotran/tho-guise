@@ -177,7 +177,7 @@ Full request/response spec, error codes, and the SimpleLogin subset implemented 
 
 ### Via Bitwarden
 
-1. In Bitwarden, configure *Username Generator → Forwarded email alias → SimpleLogin (self-hosted server)*. Server URL: `https://guise.example.com`. API key: `<your-username>:<your-imap-password>` (your mailbox short-username and IMAP password joined by a colon).
+1. In Bitwarden, configure *Username Generator → Forwarded email alias → SimpleLogin (self-hosted server)*. Server URL: `https://guise.example.com` (no path). **API key** is a single string `username:imap-password` (e.g. `thotran:s3cret` or `thotran@example.com:s3cret`) — not a separate SimpleLogin token. If the password itself contains `:`, use the web UI instead or change the password.
 2. On any sign-up form, focus the email/username field. Bitwarden's in-page bubble offers *Generate*: pick *Forwarded email alias* → a fresh `g-<random>-<site>@<domain>` alias appears and gets pasted.
 3. Manage or delete the alias later via the web UI's *Managed by guise* section.
 

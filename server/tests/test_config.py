@@ -28,3 +28,12 @@ class TestLoadConfig:
         cfg = load_config()
         assert cfg.domain == "example.com"
         assert cfg.allowed_domains == frozenset({"example.com", "mail.example.com"})
+
+    def test_imap_timeout_default_and_override(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("GUISE_DOMAIN", "example.com")
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "0")
+        monkeypatch.delenv("GUISE_IMAP_TIMEOUT", raising=False)
+        assert load_config().imap_timeout == 30.0
+        monkeypatch.setenv("GUISE_IMAP_TIMEOUT", "45")
+        assert load_config().imap_timeout == 45.0

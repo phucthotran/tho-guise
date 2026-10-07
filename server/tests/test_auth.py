@@ -16,6 +16,7 @@ def config(tmp_path):
         mailserver_container="mailserver",
         imap_host="mailserver",
         imap_port=993,
+        imap_timeout=30.0,
         imap_cafile=None,
         imap_insecure=False,
         api_autolabel=True,
@@ -35,6 +36,7 @@ def multi_domain_config(tmp_path):
         mailserver_container="mailserver",
         imap_host="mailserver",
         imap_port=993,
+        imap_timeout=30.0,
         imap_cafile=None,
         imap_insecure=False,
         api_autolabel=True,
@@ -87,6 +89,15 @@ class TestImapCheck:
         assert ctx.check_hostname is False
 
     @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_uses_configured_timeout(self, mock_imap, config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        mock_imap.return_value = instance
+        auth._imap_check("alice@example.com", "p", config)
+        _, kwargs = mock_imap.call_args
+        assert kwargs["timeout"] == 30.0
+
+    @patch("app.auth.imaplib.IMAP4_SSL")
     def test_cert_verification_required_by_default(self, mock_imap, config):
         instance = MagicMock()
         instance.__enter__.return_value = instance
@@ -104,7 +115,7 @@ class TestImapCheck:
             allowed_domains=frozenset({"example.com"}),
             tag="g-", denied_users=frozenset(),
             mailserver_container="mailserver", imap_host="mailserver",
-            imap_port=993, imap_cafile=None, imap_insecure=True,
+            imap_port=993, imap_timeout=30.0, imap_cafile=None, imap_insecure=True,
             api_autolabel=True, data_dir=tmp_path, secret_key="test",
             session_cookie_secure=False,
         )
