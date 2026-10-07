@@ -6,7 +6,7 @@ alias → SimpleLogin (self-hosted server)" username generator.
 from flask import Blueprint, Flask, current_app, jsonify, request
 
 from . import aliases
-from .auth import check_credentials
+from .auth import check_credentials, password_fingerprint
 from .config import Config
 from .extensions import limiter
 
@@ -56,18 +56,27 @@ def _authenticate(config: Config) -> str | None:
         )
         return None
     raw_username, password = creds
+    pass_fp = password_fingerprint(password, config.secret_key)
     username, error = check_credentials(raw_username, password, config)
     if username is None:
         current_app.logger.warning(
-            "LOGIN_FAILED user=%s ip=%s via=api host=%s:%s pass_len=%d err=%s",
+            "LOGIN_FAILED user=%s ip=%s via=api host=%s:%s pass_len=%d pass_fp=%s err=%s",
             raw_username,
             request.remote_addr,
             config.imap_host,
             config.imap_port,
             len(password),
+            pass_fp,
             error,
         )
         return None
+    current_app.logger.info(
+        "LOGIN user=%s ip=%s via=api pass_len=%d pass_fp=%s",
+        username,
+        request.remote_addr,
+        len(password),
+        pass_fp,
+    )
     return username
 
 

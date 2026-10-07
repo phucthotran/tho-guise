@@ -204,6 +204,19 @@ class TestBuildImapUsername:
         assert auth.build_imap_username("alice", config) == "alice@example.com"
 
 
+class TestPasswordFingerprint:
+    def test_stable_for_same_password(self, config):
+        a = auth.password_fingerprint("s3cret", config.secret_key)
+        b = auth.password_fingerprint("s3cret", config.secret_key)
+        assert a == b
+        assert len(a) == 12
+
+    def test_differs_when_password_differs(self, config):
+        assert auth.password_fingerprint("aaa", config.secret_key) != auth.password_fingerprint(
+            "aab", config.secret_key,
+        )
+
+
 class TestVerifyCredentials:
     @patch("app.auth.imaplib.IMAP4_SSL")
     def test_short_username(self, mock_imap, config):
