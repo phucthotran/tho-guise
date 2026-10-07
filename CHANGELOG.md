@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [0.3.6] — 2026-10-07
+
+### Changed
+
+- **Password fingerprint in auth logs** (`pass_fp=`, HMAC truncated, never the raw password) on web and API login success/failure, plus `pass_len=`. Operators can compare Bitwarden vs web login fingerprints in Coolify logs without shell access.
+
 ## [0.3.5] — 2026-10-07
 
 ### Changed

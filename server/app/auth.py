@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import imaplib
 import re
 import secrets
@@ -131,6 +133,20 @@ def build_imap_username(username: str, config: Config) -> str:
     return f"{username}@{config.domain}"
 
 
+def password_fingerprint(password: str, secret_key: str) -> str:
+    """Short HMAC fingerprint for comparing web vs API passwords in logs.
+
+    Never log the password itself. Same password + same instance secret_key
+    always yields the same ``pass_fp``; Bitwarden vs web mismatches show up
+    as different fingerprints.
+    """
+    return hmac.new(
+        secret_key.encode("utf-8"),
+        password.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:12]
+
+
 @dataclass(frozen=True)
 class ImapAuthResult:
     """Outcome of an IMAP LOGIN attempt. ``error`` is safe to write to logs
@@ -254,24 +270,31 @@ def register(app: Flask) -> None:
                 flash("Password required.", "error")
             else:
                 imap_result = _imap_check(identity.imap_username, password, config)
+                pass_fp = password_fingerprint(password, config.secret_key)
                 if imap_result.ok:
                     session.clear()
                     session["user"] = identity.username
                     session.permanent = True
                     current_app.logger.info(
-                        "LOGIN user=%s imap=%s ip=%s",
-                        identity.username, identity.imap_username, request.remote_addr,
+                        "LOGIN user=%s imap=%s ip=%s pass_len=%d pass_fp=%s",
+                        identity.username,
+                        identity.imap_username,
+                        request.remote_addr,
+                        len(password),
+                        pass_fp,
                     )
                     default_next = url_for("main.index")
                     next_url = _safe_next_url(request.args.get("next"), default_next)
                     return redirect(next_url)
                 current_app.logger.warning(
-                    "LOGIN_FAILED user=%s imap=%s ip=%s host=%s:%s err=%s",
+                    "LOGIN_FAILED user=%s imap=%s ip=%s host=%s:%s pass_len=%d pass_fp=%s err=%s",
                     identity.username,
                     identity.imap_username,
                     request.remote_addr,
                     config.imap_host,
                     config.imap_port,
+                    len(password),
+                    pass_fp,
                     imap_result.error,
                 )
                 flash("Login failed.", "error")
