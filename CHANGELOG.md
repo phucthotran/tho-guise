@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [0.3.5] — 2026-10-07
+
+### Changed
+
+- **Bitwarden `Authentication` header parsing hardened**: trim whitespace/newlines on user and password, strip accidental `Bearer`/`Basic` prefixes, and log password length (`pass_len=`) on API `LOGIN_FAILED` without logging the secret. Fixes mobile-paste mismatches where web login worked but Bitwarden got `AUTHENTICATIONFAILED`.
+
 ## [0.3.4] — 2026-10-07
 
 ### Changed

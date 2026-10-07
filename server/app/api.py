@@ -17,11 +17,28 @@ MAX_ATTEMPTS = 20
 
 
 def _parse_authentication_header(value: str) -> tuple[str, str] | None:
-    """Split a SimpleLogin-style `Authentication: user:password` header."""
+    """Split a SimpleLogin-style `Authentication: user:password` header.
+
+    Bitwarden pastes the whole API key into one field; trim whitespace on both
+    sides (mobile paste often adds a trailing newline that makes Dovecot reject
+    the password while the web form login still works).
+    """
     if not value or ":" not in value:
         return None
-    username, password = value.split(":", 1)
-    return username.strip().lower(), password
+    # Drop accidental "Bearer " / "Basic " prefixes some clients add.
+    cleaned = value.strip()
+    for prefix in ("bearer ", "basic "):
+        if cleaned.lower().startswith(prefix):
+            cleaned = cleaned[len(prefix):].strip()
+            break
+    if ":" not in cleaned:
+        return None
+    username, password = cleaned.split(":", 1)
+    username = username.strip().lower()
+    password = password.strip()
+    if not username or not password:
+        return None
+    return username, password
 
 
 def _authenticate(config: Config) -> str | None:
@@ -33,16 +50,21 @@ def _authenticate(config: Config) -> str | None:
     """
     creds = _parse_authentication_header(request.headers.get("Authentication", ""))
     if not creds:
+        current_app.logger.warning(
+            "LOGIN_FAILED user=? ip=%s via=api err=bad_authentication_header",
+            request.remote_addr,
+        )
         return None
     raw_username, password = creds
     username, error = check_credentials(raw_username, password, config)
     if username is None:
         current_app.logger.warning(
-            "LOGIN_FAILED user=%s ip=%s via=api host=%s:%s err=%s",
+            "LOGIN_FAILED user=%s ip=%s via=api host=%s:%s pass_len=%d err=%s",
             raw_username,
             request.remote_addr,
             config.imap_host,
             config.imap_port,
+            len(password),
             error,
         )
         return None

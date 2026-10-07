@@ -92,6 +92,25 @@ class TestCreateRandomAlias:
         resp = client.post(URL, headers={"Authentication": "no-colon-here"})
         assert resp.status_code == 401
 
+    @patch("app.aliases._run_setup")
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_auth_header_strips_whitespace_and_bearer(self, mock_imap, mock_run, client):
+        instance = _imap_ok(mock_imap)
+        mock_run.side_effect = [_result(stdout=""), _result()]
+        resp = client.post(
+            URL,
+            headers={"Authentication": "  Bearer alice:pw  "},  # NOSONAR — test fixture
+        )
+        assert resp.status_code == 201
+        instance.login.assert_called_once_with("alice@example.com", "pw")
+
+    def test_parse_authentication_header_helpers(self):
+        from app.api import _parse_authentication_header
+        assert _parse_authentication_header("alice:pw") == ("alice", "pw")
+        assert _parse_authentication_header("  Bearer alice:pw\n") == ("alice", "pw")
+        assert _parse_authentication_header("alice:") is None
+        assert _parse_authentication_header("no-colon") is None
+
     @patch("app.auth.imaplib.IMAP4_SSL")
     def test_bad_password(self, mock_imap, client):
         _imap_fail(mock_imap)
