@@ -50,7 +50,9 @@ class TestImapCheck:
         instance = MagicMock()
         instance.__enter__.return_value = instance
         mock_imap.return_value = instance
-        assert auth._imap_check("alice@example.com", "password", config) is True
+        result = auth._imap_check("alice@example.com", "password", config)
+        assert result.ok is True
+        assert result.error is None
         instance.login.assert_called_once_with("alice@example.com", "password")
 
     @patch("app.auth.imaplib.IMAP4_SSL")
@@ -59,11 +61,20 @@ class TestImapCheck:
         instance.__enter__.return_value = instance
         instance.login.side_effect = auth.imaplib.IMAP4.error("LOGIN failed")
         mock_imap.return_value = instance
-        assert auth._imap_check("alice@example.com", "bad", config) is False
+        result = auth._imap_check("alice@example.com", "bad", config)
+        assert result.ok is False
+        assert result.error is not None
+        # imaplib.IMAP4.error reports type name as plain "error"
+        assert "LOGIN failed" in result.error
+        assert "host=mailserver:993" in result.error
+        assert "bad" not in result.error  # password must never appear
 
     @patch("app.auth.imaplib.IMAP4_SSL", side_effect=OSError("connection refused"))
     def test_network_error(self, mock_imap, config):
-        assert auth._imap_check("alice@example.com", "p", config) is False
+        result = auth._imap_check("alice@example.com", "p", config)
+        assert result.ok is False
+        assert "OSError" in (result.error or "")
+        assert "connection refused" in (result.error or "")
 
     @patch("app.auth.imaplib.IMAP4_SSL")
     def test_hostname_check_disabled(self, mock_imap, config):
@@ -105,6 +116,22 @@ class TestImapCheck:
         ctx = kwargs["ssl_context"]
         import ssl as _ssl
         assert ctx.verify_mode == _ssl.CERT_NONE
+
+
+class TestImapErrorDetail:
+    def test_includes_type_host_port(self, config):
+        detail = auth._imap_error_detail(OSError("Name or service not known"), config)
+        assert detail.startswith("OSError:")
+        assert "Name or service not known" in detail
+        assert "host=mailserver:993" in detail
+
+    def test_collapses_whitespace_and_truncates(self, config):
+        long = "x" * 300
+        detail = auth._imap_error_detail(RuntimeError(f"line1\n{long}"), config)
+        assert "\n" not in detail
+        assert "..." in detail
+        assert detail.endswith("host=mailserver:993")
+        assert len(detail) < 220
 
 
 class TestNormalizeLoginUsername:
@@ -207,6 +234,31 @@ class TestVerifyCredentials:
         instance.login.side_effect = auth.imaplib.IMAP4.error("LOGIN failed")
         mock_imap.return_value = instance
         assert auth.verify_credentials("alice", "bad", config) is None
+
+
+class TestCheckCredentials:
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_success(self, mock_imap, config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        mock_imap.return_value = instance
+        user, err = auth.check_credentials("alice", "pw", config)
+        assert user == "alice"
+        assert err is None
+
+    @patch("app.auth.imaplib.IMAP4_SSL", side_effect=OSError("Name or service not known"))
+    def test_returns_log_safe_imap_error(self, mock_imap, config):
+        user, err = auth.check_credentials("alice", "secret-password", config)
+        assert user is None
+        assert err is not None
+        assert "OSError" in err
+        assert "host=mailserver:993" in err
+        assert "secret-password" not in err
+
+    def test_normalize_error(self, config):
+        user, err = auth.check_credentials("alice@evil.com", "pw", config)
+        assert user is None
+        assert err == "normalize:unknown_domain"
 
 
 class TestSafeNextUrl:
