@@ -10,8 +10,28 @@ from app.config import Config
 def config(tmp_path):
     return Config(
         domain="example.com",
+        allowed_domains=frozenset({"example.com"}),
         tag="g-",
         denied_users=frozenset({"gitea", "immich"}),
+        mailserver_container="mailserver",
+        imap_host="mailserver",
+        imap_port=993,
+        imap_cafile=None,
+        imap_insecure=False,
+        api_autolabel=True,
+        data_dir=tmp_path,
+        secret_key="test-secret",
+        session_cookie_secure=False,
+    )
+
+
+@pytest.fixture
+def multi_domain_config(tmp_path):
+    return Config(
+        domain="example.com",
+        allowed_domains=frozenset({"example.com", "other.com"}),
+        tag="g-",
+        denied_users=frozenset(),
         mailserver_container="mailserver",
         imap_host="mailserver",
         imap_port=993,
@@ -30,7 +50,7 @@ class TestImapCheck:
         instance = MagicMock()
         instance.__enter__.return_value = instance
         mock_imap.return_value = instance
-        assert auth._imap_check("alice", "password", config) is True
+        assert auth._imap_check("alice@example.com", "password", config) is True
         instance.login.assert_called_once_with("alice@example.com", "password")
 
     @patch("app.auth.imaplib.IMAP4_SSL")
@@ -39,18 +59,18 @@ class TestImapCheck:
         instance.__enter__.return_value = instance
         instance.login.side_effect = auth.imaplib.IMAP4.error("LOGIN failed")
         mock_imap.return_value = instance
-        assert auth._imap_check("alice", "bad", config) is False
+        assert auth._imap_check("alice@example.com", "bad", config) is False
 
     @patch("app.auth.imaplib.IMAP4_SSL", side_effect=OSError("connection refused"))
     def test_network_error(self, mock_imap, config):
-        assert auth._imap_check("alice", "p", config) is False
+        assert auth._imap_check("alice@example.com", "p", config) is False
 
     @patch("app.auth.imaplib.IMAP4_SSL")
     def test_hostname_check_disabled(self, mock_imap, config):
         instance = MagicMock()
         instance.__enter__.return_value = instance
         mock_imap.return_value = instance
-        auth._imap_check("alice", "p", config)
+        auth._imap_check("alice@example.com", "p", config)
         _, kwargs = mock_imap.call_args
         ctx = kwargs["ssl_context"]
         assert ctx.check_hostname is False
@@ -60,7 +80,7 @@ class TestImapCheck:
         instance = MagicMock()
         instance.__enter__.return_value = instance
         mock_imap.return_value = instance
-        auth._imap_check("alice", "p", config)
+        auth._imap_check("alice@example.com", "p", config)
         _, kwargs = mock_imap.call_args
         ctx = kwargs["ssl_context"]
         import ssl as _ssl
@@ -69,7 +89,9 @@ class TestImapCheck:
     @patch("app.auth.imaplib.IMAP4_SSL")
     def test_insecure_mode_disables_verification(self, mock_imap, tmp_path):
         insecure_config = Config(
-            domain="example.com", tag="g-", denied_users=frozenset(),
+            domain="example.com",
+            allowed_domains=frozenset({"example.com"}),
+            tag="g-", denied_users=frozenset(),
             mailserver_container="mailserver", imap_host="mailserver",
             imap_port=993, imap_cafile=None, imap_insecure=True,
             api_autolabel=True, data_dir=tmp_path, secret_key="test",
@@ -78,11 +100,113 @@ class TestImapCheck:
         instance = MagicMock()
         instance.__enter__.return_value = instance
         mock_imap.return_value = instance
-        auth._imap_check("alice", "p", insecure_config)
+        auth._imap_check("alice@example.com", "p", insecure_config)
         _, kwargs = mock_imap.call_args
         ctx = kwargs["ssl_context"]
         import ssl as _ssl
         assert ctx.verify_mode == _ssl.CERT_NONE
+
+
+class TestNormalizeLoginUsername:
+    def test_short_username(self, config):
+        identity = auth.normalize_login_username("alice", config)
+        assert isinstance(identity, auth.LoginIdentity)
+        assert identity.username == "alice"
+        assert identity.imap_username == "alice@example.com"
+
+    def test_full_email_primary_domain(self, config):
+        identity = auth.normalize_login_username("alice@example.com", config)
+        assert isinstance(identity, auth.LoginIdentity)
+        assert identity.username == "alice"
+        assert identity.imap_username == "alice@example.com"
+
+    def test_domain_case_insensitive(self, config):
+        identity = auth.normalize_login_username("alice@EXAMPLE.COM", config)
+        assert isinstance(identity, auth.LoginIdentity)
+        assert identity.username == "alice"
+        assert identity.imap_username == "alice@example.com"
+
+    def test_unknown_domain_rejected(self, config):
+        err = auth.normalize_login_username("alice@other.com", config)
+        assert isinstance(err, auth.NormalizeError)
+        assert err.reason == "unknown_domain"
+        assert "Permitted domains:" in err.message
+        assert "example.com" in err.message
+
+    def test_allowlisted_alternate_domain(self, multi_domain_config):
+        identity = auth.normalize_login_username("alice@other.com", multi_domain_config)
+        assert isinstance(identity, auth.LoginIdentity)
+        assert identity.username == "alice"
+        assert identity.imap_username == "alice@other.com"
+
+    def test_empty_rejected(self, config):
+        err = auth.normalize_login_username("", config)
+        assert isinstance(err, auth.NormalizeError)
+        assert err.reason == "empty"
+
+    def test_bad_local_part(self, config):
+        err = auth.normalize_login_username("Alice", config)
+        assert isinstance(err, auth.NormalizeError)
+        assert err.reason == "bad_username"
+
+    def test_empty_local_with_matching_domain(self, config):
+        err = auth.normalize_login_username("@example.com", config)
+        assert isinstance(err, auth.NormalizeError)
+        assert err.reason == "bad_username"
+
+    def test_multiple_at_signs_domain_not_allowed(self, config):
+        # First @ is the separator; domain becomes "example@example.com"
+        err = auth.normalize_login_username("alice@example@example.com", config)
+        assert isinstance(err, auth.NormalizeError)
+        assert err.reason == "unknown_domain"
+
+
+class TestBuildImapUsername:
+    def test_appends_guise_domain(self, config):
+        assert auth.build_imap_username("alice", config) == "alice@example.com"
+
+
+class TestVerifyCredentials:
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_short_username(self, mock_imap, config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        mock_imap.return_value = instance
+        assert auth.verify_credentials("alice", "pw", config) == "alice"
+        instance.login.assert_called_once_with("alice@example.com", "pw")
+
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_full_email_primary_domain(self, mock_imap, config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        mock_imap.return_value = instance
+        assert auth.verify_credentials("alice@example.com", "pw", config) == "alice"
+        instance.login.assert_called_once_with("alice@example.com", "pw")
+
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_allowlisted_alternate_domain(self, mock_imap, multi_domain_config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        mock_imap.return_value = instance
+        assert auth.verify_credentials("alice@other.com", "pw", multi_domain_config) == "alice"
+        instance.login.assert_called_once_with("alice@other.com", "pw")
+
+    def test_unknown_domain(self, config):
+        assert auth.verify_credentials("alice@evil.com", "pw", config) is None
+
+    def test_denied_user(self, config):
+        assert auth.verify_credentials("gitea", "pw", config) is None
+
+    def test_empty_password(self, config):
+        assert auth.verify_credentials("alice", "", config) is None
+
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_bad_password(self, mock_imap, config):
+        instance = MagicMock()
+        instance.__enter__.return_value = instance
+        instance.login.side_effect = auth.imaplib.IMAP4.error("LOGIN failed")
+        mock_imap.return_value = instance
+        assert auth.verify_credentials("alice", "bad", config) is None
 
 
 class TestSafeNextUrl:
@@ -139,29 +263,6 @@ class TestCsrfValid:
     def test_both_empty(self):
         assert auth._csrf_valid("", "") is False
         assert auth._csrf_valid(None, None) is False
-
-
-class TestStripDomain:
-    def test_no_at_passes_through(self):
-        assert auth._strip_domain("alice", "example.com") == "alice"
-
-    def test_matching_domain_stripped(self):
-        assert auth._strip_domain("alice@example.com", "example.com") == "alice"
-
-    def test_domain_case_insensitive(self):
-        assert auth._strip_domain("alice@EXAMPLE.COM", "example.com") == "alice"
-        assert auth._strip_domain("alice@example.com", "Example.Com") == "alice"
-
-    def test_mismatched_domain_returns_none(self):
-        assert auth._strip_domain("alice@other.com", "example.com") is None
-
-    def test_empty_local_with_matching_domain(self):
-        # @example.com with empty local part — strips to "", caller's regex will reject
-        assert auth._strip_domain("@example.com", "example.com") == ""
-
-    def test_multiple_at_signs_use_first(self):
-        # First @ is the separator; "example@example.com" as domain won't match
-        assert auth._strip_domain("alice@example@example.com", "example.com") is None
 
 
 class TestUsernameRegex:

@@ -14,13 +14,16 @@ guise does not aim to be a drop-in SimpleLogin replacement; only the endpoints l
 
 ## Authentication
 
-Each API request must send an `Authentication` header (note the spelling — SimpleLogin uses `Authentication`, not `Authorization`). The value is the mailbox short-username and IMAP password joined by a colon:
+Each API request must send an `Authentication` header (note the spelling — SimpleLogin uses `Authentication`, not `Authorization`). The value is the mailbox username and IMAP password joined by a colon. Both short usernames and full email addresses on an allowlisted domain are accepted:
 
 ```
 Authentication: alice:s3cret-imap-password
+Authentication: alice@example.com:s3cret-imap-password
 ```
 
-guise splits on the first `:` and verifies via the same IMAP-against-dovecot path used by the web login (`_imap_check`). Same auth surface, same denylist, same rate limit (`flask-limiter` at 30/min). No new credentials to manage; no token store to back up.
+guise splits on the first `:`, normalizes the username (short local-part for the session/alias target; full email for IMAP LOGIN), and verifies via the same IMAP-against-dovecot path used by the web login. Same auth surface, same denylist, same rate limit (`flask-limiter` at 30/min). Unknown domains are rejected (401). No new credentials to manage; no token store to back up.
+
+Alias CRUD always targets `{local}@{GUISE_DOMAIN}` even when the caller authenticated with an allowlisted alternate domain (see `GUISE_ALLOWED_DOMAINS`). Multi-domain alias targeting is not implemented.
 
 **Trade-off**: this places the IMAP password in the caller's configuration (e.g. Bitwarden's username-generator settings, which Bitwarden encrypts at rest). Functionally equivalent to configuring any other IMAP client with the same credential.
 
