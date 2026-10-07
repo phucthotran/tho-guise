@@ -25,14 +25,20 @@ def _parse_authentication_header(value: str) -> tuple[str, str] | None:
 
 
 def _authenticate(config: Config) -> str | None:
-    """Return the short username on success, None otherwise."""
+    """Return the short username on success, None otherwise.
+
+    Accepts short usernames or full emails (allowlisted domains) in the
+    ``Authentication`` header; always returns the short local-part so alias
+    targets stay on ``GUISE_DOMAIN``.
+    """
     creds = _parse_authentication_header(request.headers.get("Authentication", ""))
     if not creds:
         return None
-    username, password = creds
-    if not verify_credentials(username, password, config):
+    raw_username, password = creds
+    username = verify_credentials(raw_username, password, config)
+    if username is None:
         current_app.logger.warning(
-            "LOGIN_FAILED user=%s ip=%s via=api", username, request.remote_addr,
+            "LOGIN_FAILED user=%s ip=%s via=api", raw_username, request.remote_addr,
         )
         return None
     return username

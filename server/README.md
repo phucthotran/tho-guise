@@ -4,7 +4,7 @@ Flask + gunicorn web app for managing [`docker-mailserver`](https://github.com/d
 
 ## Architecture
 
-- **Auth**: short username + password is checked by connecting to dovecot over IMAPS (`mailserver:993`). No password store of our own. Failed logins go through dovecot's fail2ban jail.
+- **Auth**: username + password is checked by connecting to dovecot over IMAPS (`mailserver:993`) with a **full email** IMAP LOGIN identity. Short usernames (`alice`) and full addresses (`alice@domain`) are both accepted; the session always stores the short local-part. No password store of our own. Failed logins go through dovecot's fail2ban jail.
 - **Alias CRUD**: `docker exec mailserver setup alias add/del/list` via the `docker-socket-proxy` sidecar's restricted Docker API. The mailserver container is the source of truth.
 - **HTTP API**: `POST /api/alias/random/new` accepts a SimpleLogin-style `Authentication: user:password` header, runs the same IMAP auth + denylist as the web UI, and creates an alias targeting the authenticated mailbox. CSRF-exempt (header-auth, no session). Optional `?hostname=` query parameter triggers PSL-aware auto-labelling. Spec in [`../docs/api.md`](../docs/api.md).
 - **State guise owns**: only `/data/secret_key` (Flask session signing key, regenerated on first start). Wiping `guise-data/` and restarting is a clean reset — no user data is lost because no user data is stored.
@@ -56,7 +56,8 @@ Set in the deploying compose file.
 
 | Var | Default | Notes |
 |---|---|---|
-| `GUISE_DOMAIN` | *required* | Appended to short username at login; used as alias domain |
+| `GUISE_DOMAIN` | *required* | Primary mail/alias domain; appended to short usernames for IMAP LOGIN; used as alias domain |
+| `GUISE_ALLOWED_DOMAINS` | (empty → `{GUISE_DOMAIN}` only) | Extra comma-separated domains permitted in full-email logins (case-insensitive). `GUISE_DOMAIN` is always included. Session/alias targeting still uses the short local-part on `GUISE_DOMAIN` |
 | `GUISE_TAG` | `g-` | Namespace prefix on managed aliases |
 | `GUISE_DENIED_USERS` | (empty) | Comma-separated short usernames blocked from login (use for service accounts) |
 | `GUISE_MAILSERVER_CONTAINER` | `mailserver` | `docker exec <this>` target |

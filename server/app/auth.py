@@ -2,8 +2,9 @@ import imaplib
 import re
 import secrets
 import ssl
+from dataclasses import dataclass
 from functools import wraps
-from typing import Callable
+from typing import Callable, Literal
 from urllib.parse import urlparse
 
 from flask import Flask, abort, current_app, flash, g, redirect, render_template, request, session, url_for
@@ -14,6 +15,25 @@ from .extensions import limiter
 
 USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+@dataclass(frozen=True)
+class LoginIdentity:
+    """Normalized identity shared by web login and API auth.
+
+    ``username`` is the short local-part stored in the session and used for
+    alias targeting (``{username}@{GUISE_DOMAIN}``). ``imap_username`` is the
+    full email address passed to Dovecot IMAP LOGIN — never short-only.
+    """
+
+    username: str
+    imap_username: str
+
+
+@dataclass(frozen=True)
+class NormalizeError:
+    reason: Literal["empty", "bad_username", "unknown_domain"]
+    message: str
 
 
 def csrf_token() -> str:
@@ -61,24 +81,61 @@ def _safe_next_url(raw: str | None, default: str) -> str:
     return raw
 
 
-def _strip_domain(username: str, domain: str) -> str | None:
-    """Convenience: if the user typed a full email address with our configured
-    domain, strip the @suffix and use the short form.
+def normalize_login_username(raw: str, config: Config) -> LoginIdentity | NormalizeError:
+    """Parse a login identifier into session short-name + full IMAP username.
 
-    Returns the short username on success (or the unchanged input if no `@`),
-    or None if `@` is present with a different domain (so the caller can flash
-    a clearer error than the username regex would produce).
+    Accepts short ``alice`` or full ``alice@domain`` forms. Short names always
+    authenticate as ``alice@{GUISE_DOMAIN}``. Full addresses are allowed only
+    when the domain is in ``config.allowed_domains`` (case-insensitive); the
+    IMAP LOGIN uses that full address, while the session still stores the
+    local-part for alias targeting on ``GUISE_DOMAIN``.
+
+    Note: aliases are always created as ``{local}@{GUISE_DOMAIN}``. Logging in
+    with an allowlisted alternate domain authenticates that mailbox over IMAP
+    but does not retarget alias CRUD to the alternate domain.
     """
-    if "@" not in username:
-        return username
-    local, _, domain_part = username.partition("@")
-    if domain_part.lower() == domain.lower():
-        return local
-    return None
+    if not raw:
+        return NormalizeError("empty", "Username required.")
+
+    if "@" not in raw:
+        local = raw
+        imap_username = f"{local}@{config.domain}"
+    else:
+        local, _, domain_part = raw.partition("@")
+        if domain_part.lower() not in config.allowed_domains:
+            allowed = ", ".join(sorted(config.allowed_domains))
+            return NormalizeError(
+                "unknown_domain",
+                f"Domain not allowed for login. Permitted domains: {allowed}.",
+            )
+        # Preserve the configured primary domain's canonical casing when it
+        # matches; otherwise keep the (already lowercased) typed domain.
+        if domain_part.lower() == config.domain.lower():
+            imap_domain = config.domain
+        else:
+            imap_domain = domain_part.lower()
+        imap_username = f"{local}@{imap_domain}"
+
+    if not USERNAME_RE.match(local):
+        return NormalizeError("bad_username", "Invalid username.")
+
+    return LoginIdentity(username=local, imap_username=imap_username)
 
 
-def _imap_check(username: str, password: str, config: Config) -> bool:
+def build_imap_username(username: str, config: Config) -> str:
+    """Build the full IMAP LOGIN identity for a short session username.
+
+    Prefer ``normalize_login_username`` for raw form/header input; use this
+    only when you already have a validated short local-part.
+    """
+    return f"{username}@{config.domain}"
+
+
+def _imap_check(imap_username: str, password: str, config: Config) -> bool:
     """Authenticate against the mailserver's dovecot via IMAPS.
+
+    ``imap_username`` must already be a full email address (see
+    ``normalize_login_username`` / ``build_imap_username``).
 
     Cert validation is on by default (CERT_REQUIRED against the system trust
     store, or `GUISE_IMAP_CAFILE` if set). Hostname verification is off because
@@ -96,10 +153,9 @@ def _imap_check(username: str, password: str, config: Config) -> bool:
         ctx.verify_mode = ssl.CERT_REQUIRED
         if config.imap_cafile:
             ctx.load_verify_locations(cafile=config.imap_cafile)
-    full = f"{username}@{config.domain}"
     try:
         with imaplib.IMAP4_SSL(config.imap_host, config.imap_port, ssl_context=ctx, timeout=10) as imap:
-            imap.login(full, password)
+            imap.login(imap_username, password)
             try:
                 imap.logout()
             except Exception:
@@ -112,19 +168,24 @@ def _imap_check(username: str, password: str, config: Config) -> bool:
         return False
 
 
-def verify_credentials(username: str, password: str, config: Config) -> bool:
-    """Validate a short username + password against denylist, regex, and IMAP.
+def verify_credentials(raw_username: str, password: str, config: Config) -> str | None:
+    """Normalize + validate + IMAP-check. Returns short username on success.
 
     Shared by the web login flow and the API auth path so they accept exactly
-    the same identities.
+    the same identities. Accepts short usernames or full emails on an
+    allowlisted domain. Does not store or hash passwords — plaintext is sent
+    over IMAPS to Dovecot only.
     """
-    if not username or not password:
-        return False
-    if not USERNAME_RE.match(username):
-        return False
-    if username in config.denied_users:
-        return False
-    return _imap_check(username, password, config)
+    if not password:
+        return None
+    identity = normalize_login_username(raw_username, config)
+    if isinstance(identity, NormalizeError):
+        return None
+    if identity.username in config.denied_users:
+        return None
+    if _imap_check(identity.imap_username, password, config):
+        return identity.username
+    return None
 
 
 def login_required(view: Callable) -> Callable:
@@ -133,7 +194,7 @@ def login_required(view: Callable) -> Callable:
         if "user" not in session:
             return redirect(url_for("auth.login", next=request.path))
         g.user = session["user"]
-        g.target_email = f"{g.user}@{current_app.config['GUISE'].domain}"
+        g.target_email = build_imap_username(g.user, current_app.config["GUISE"])
         return view(*args, **kwargs)
     return wrapped
 
@@ -149,35 +210,31 @@ def register(app: Flask) -> None:
         if request.method == "POST":
             raw = (request.form.get("username") or "").strip().lower()
             password = request.form.get("password") or ""
-            username = _strip_domain(raw, config.domain)
-            if username is None:
-                flash(
-                    f"This instance manages aliases for {config.domain}. "
-                    "Enter your short username (without @domain).",
-                    "error",
-                )
-            elif not USERNAME_RE.match(username):
-                flash("Invalid username.", "error")
-            elif username in config.denied_users:
+            identity = normalize_login_username(raw, config)
+            if isinstance(identity, NormalizeError):
+                flash(identity.message, "error")
+            elif identity.username in config.denied_users:
                 current_app.logger.warning(
-                    "LOGIN_DENIED user=%s ip=%s", username, request.remote_addr,
+                    "LOGIN_DENIED user=%s ip=%s", identity.username, request.remote_addr,
                 )
                 flash("This account is not permitted to use guise.", "error")
             elif not password:
                 flash("Password required.", "error")
-            elif _imap_check(username, password, config):
+            elif _imap_check(identity.imap_username, password, config):
                 session.clear()
-                session["user"] = username
+                session["user"] = identity.username
                 session.permanent = True
                 current_app.logger.info(
-                    "LOGIN user=%s ip=%s", username, request.remote_addr,
+                    "LOGIN user=%s imap=%s ip=%s",
+                    identity.username, identity.imap_username, request.remote_addr,
                 )
                 default_next = url_for("main.index")
                 next_url = _safe_next_url(request.args.get("next"), default_next)
                 return redirect(next_url)
             else:
                 current_app.logger.warning(
-                    "LOGIN_FAILED user=%s ip=%s", username, request.remote_addr,
+                    "LOGIN_FAILED user=%s imap=%s ip=%s",
+                    identity.username, identity.imap_username, request.remote_addr,
                 )
                 flash("Login failed.", "error")
         return render_template("login.html")

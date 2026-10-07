@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [Unreleased]
+
+### Changed
+
+- **IMAP login username normalization (B1+B2).** Web form and API `Authentication` header now share `normalize_login_username`: short `alice` and full `alice@domain` both authenticate with a full-email IMAP LOGIN identity. Optional `GUISE_ALLOWED_DOMAINS` (comma-separated, case-insensitive; default `{GUISE_DOMAIN}`) permits alternate domains for IMAP auth; the session still stores the short local-part and alias targets remain on `GUISE_DOMAIN`.
+
 ## [0.3.1] — 2026-06-19
 
 ### Security

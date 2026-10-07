@@ -110,6 +110,47 @@ class TestCreateRandomAlias:
 
     @patch("app.aliases._run_setup")
     @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_full_email_in_auth_header(self, mock_imap, mock_run, client):
+        instance = _imap_ok(mock_imap)
+        mock_run.side_effect = [_result(stdout=""), _result()]
+        resp = client.post(
+            URL, headers=_auth_header(user="alice@example.com"),
+        )
+        assert resp.status_code == 201
+        instance.login.assert_called_once_with("alice@example.com", "pw")
+        # Alias still targets short-local@GUISE_DOMAIN
+        add_args = mock_run.call_args_list[1].args
+        assert add_args[1:3] == ("alias", "add")
+        assert add_args[4] == "alice@example.com"
+
+    def test_unknown_domain_in_auth_header(self, client):
+        resp = client.post(
+            URL, headers=_auth_header(user="alice@evil.com"),
+        )
+        assert resp.status_code == 401
+
+    @patch("app.aliases._run_setup")
+    @patch("app.auth.imaplib.IMAP4_SSL")
+    def test_allowlisted_alternate_domain_in_auth_header(
+        self, mock_imap, mock_run, monkeypatch, tmp_path,
+    ):
+        monkeypatch.setenv("GUISE_DOMAIN", "example.com")
+        monkeypatch.setenv("GUISE_ALLOWED_DOMAINS", "other.com")
+        monkeypatch.setenv("GUISE_DENIED_USERS", "")
+        monkeypatch.setenv("DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("SESSION_COOKIE_SECURE", "0")
+        from app import create_app
+        app2 = create_app()
+        app2.config["TESTING"] = True
+        c2 = app2.test_client()
+        instance = _imap_ok(mock_imap)
+        mock_run.side_effect = [_result(stdout=""), _result()]
+        resp = c2.post(URL, headers=_auth_header(user="alice@other.com"))
+        assert resp.status_code == 201
+        instance.login.assert_called_once_with("alice@other.com", "pw")
+
+    @patch("app.aliases._run_setup")
+    @patch("app.auth.imaplib.IMAP4_SSL")
     def test_csrf_not_enforced_on_api(self, mock_imap, mock_run, client):
         # No CSRF cookie, no CSRF token — would 400 on /create but must succeed here
         _imap_ok(mock_imap)

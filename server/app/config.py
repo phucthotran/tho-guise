@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class Config:
     domain: str
+    allowed_domains: frozenset[str]
     tag: str
     denied_users: frozenset[str]
     mailserver_container: str
@@ -25,6 +26,22 @@ def _bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_allowed_domains(domain: str) -> frozenset[str]:
+    """Domains permitted in full-email login usernames (case-insensitive).
+
+    Default allowlist is ``{GUISE_DOMAIN}``. When ``GUISE_ALLOWED_DOMAINS`` is
+    set, those domains are used *in addition* to ``GUISE_DOMAIN`` (the primary
+    alias domain is always allowed).
+    """
+    allowed = {domain.lower()}
+    raw = os.environ.get("GUISE_ALLOWED_DOMAINS", "")
+    for part in raw.split(","):
+        d = part.strip().lower()
+        if d:
+            allowed.add(d)
+    return frozenset(allowed)
 
 
 def _load_or_create_secret_key(data_dir: Path) -> str:
@@ -55,6 +72,7 @@ def load_config() -> Config:
         raise RuntimeError("GUISE_DOMAIN must be set")
     return Config(
         domain=domain,
+        allowed_domains=_parse_allowed_domains(domain),
         tag=os.environ.get("GUISE_TAG", "g-"),
         denied_users=frozenset(denied),
         mailserver_container=os.environ.get("GUISE_MAILSERVER_CONTAINER", "mailserver"),
