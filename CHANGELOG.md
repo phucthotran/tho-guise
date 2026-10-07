@@ -2,6 +2,12 @@
 
 All notable changes to guise are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). The project does not yet follow strict semantic versioning — backwards-incompatible changes before 1.0 will be called out explicitly.
 
+## [0.3.4] — 2026-10-07
+
+### Changed
+
+- **IMAP timeout default raised to 30s** (was hard-coded 10s) and made configurable via `GUISE_IMAP_TIMEOUT`. Helps Bitwarden / API auth when Dovecot is slow to accept connections under load.
+
 ## [0.3.3] — 2026-10-07
 
 ### Changed

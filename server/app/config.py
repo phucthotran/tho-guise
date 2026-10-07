@@ -13,6 +13,7 @@ class Config:
     mailserver_container: str
     imap_host: str
     imap_port: int
+    imap_timeout: float
     imap_cafile: str | None
     imap_insecure: bool
     api_autolabel: bool
@@ -26,6 +27,19 @@ def _bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a number") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be > 0")
+    return value
 
 
 def _parse_allowed_domains(domain: str) -> frozenset[str]:
@@ -78,6 +92,8 @@ def load_config() -> Config:
         mailserver_container=os.environ.get("GUISE_MAILSERVER_CONTAINER", "mailserver"),
         imap_host=os.environ.get("GUISE_IMAP_HOST", "mailserver"),
         imap_port=int(os.environ.get("GUISE_IMAP_PORT", "993")),
+        # Default 30s: Bitwarden API auth + cold Dovecot can exceed the old 10s.
+        imap_timeout=_float("GUISE_IMAP_TIMEOUT", 30.0),
         imap_cafile=os.environ.get("GUISE_IMAP_CAFILE") or None,
         imap_insecure=_bool("GUISE_IMAP_INSECURE", False),
         api_autolabel=_bool("GUISE_API_AUTOLABEL", True),
